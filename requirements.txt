@@ -1,27 +1,51 @@
-# AWB Pipeline dependencies
-# Install with: pip install -r requirements.txt
-
-# Core PDF / image processing
-PyMuPDF>=1.23.0
-Pillow>=10.0.0
-pytesseract>=0.3.10
-
-# EDM duplicate detection
-rapidfuzz>=3.0.0
-imagehash>=4.3.1
-opencv-python>=4.8.0
-
-# EDM API
-requests>=2.31.0
-
-# File watching
-watchdog>=3.0.0
-
-# Excel / data
-openpyxl>=3.1.0
-
-# PDF batch builder
-reportlab>=4.0.0
-
-# Config
-python-dotenv>=1.0.0
+acres==0.5.0
+aiofiles==25.1.0
+anyio==4.12.1
+certifi==2026.1.4
+charset-normalizer==3.4.4
+ci-info==0.3.0
+click==8.3.1
+configobj==5.0.9
+configparser==7.2.0
+customtkinter==5.2.2
+darkdetect==0.8.0
+et_xmlfile==2.0.0
+etelemetry==0.3.1
+exceptiongroup==1.3.1
+filelock==3.20.3
+fitz==0.0.1.dev2
+frontend==0.0.3
+h11==0.16.0
+httplib2==0.31.1
+idna==3.11
+importlib_resources==6.5.2
+isodate==0.7.2
+itsdangerous==2.2.0
+looseversion==1.3.0
+lxml==6.0.2
+networkx==3.4.2
+nibabel==5.3.3
+nipype==1.10.0
+numpy==2.2.6
+openpyxl==3.1.5
+packaging==25.0
+pandas==2.3.1
+pathlib==1.0.1
+prov==2.1.1
+puremagic==1.30
+pydot==4.0.1
+pyparsing==3.3.1
+python-dateutil==2.9.0.post0
+pytz==2025.2
+pyxnat==1.6.4
+rdflib==7.5.0
+requests==2.32.5
+scipy==1.15.3
+simplejson==3.20.2
+six==1.17.0
+starlette==0.51.0
+traits==7.1.0
+typing_extensions==4.15.0
+tzdata==2025.2
+urllib3==2.6.3
+uvicorn==0.40.0
