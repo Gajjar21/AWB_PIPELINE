@@ -1,0 +1,27 @@
+# AWB Pipeline dependencies
+# Install with: pip install -r requirements.txt
+
+# Core PDF / image processing
+PyMuPDF>=1.23.0
+Pillow>=10.0.0
+pytesseract>=0.3.10
+
+# EDM duplicate detection
+rapidfuzz>=3.0.0
+imagehash>=4.3.1
+opencv-python>=4.8.0
+
+# EDM API
+requests>=2.31.0
+
+# File watching
+watchdog>=3.0.0
+
+# Excel / data
+openpyxl>=3.1.0
+
+# PDF batch builder
+reportlab>=4.0.0
+
+# Config
+python-dotenv>=1.0.0
