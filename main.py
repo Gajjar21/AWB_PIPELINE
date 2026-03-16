@@ -107,12 +107,12 @@ def wait_until_inbox_empty(log_fn, stable_seconds=8, max_wait=1800):
         if n == 0:
             if empty_since is None:
                 empty_since = time.time()
-                log_fn(f"[AUTO] INBOX empty. Waiting {stable_seconds}s to confirm...")
+                log_fn(f"[AUTO] Waiting INBOX empty | stable check {stable_seconds}s")
             if (time.time() - empty_since) >= stable_seconds:
                 return True
         else:
             empty_since = None
-            log_fn(f"[AUTO] Waiting for INBOX... PDFs remaining: {n}")
+            log_fn(f"[AUTO] Waiting INBOX empty | remaining: {n}")
         if (time.time() - start) >= max_wait:
             log_fn(f"[AUTO] Timeout after {max_wait}s.")
             return False
@@ -127,12 +127,12 @@ def wait_until_processed_empty(log_fn, stable_seconds=5, max_wait=600):
         if n == 0:
             if empty_since is None:
                 empty_since = time.time()
-                log_fn(f"[AUTO] PROCESSED empty. Waiting {stable_seconds}s to confirm...")
+                log_fn(f"[AUTO] Waiting PROCESSED drain | stable check {stable_seconds}s")
             if (time.time() - empty_since) >= stable_seconds:
                 return True
         else:
             empty_since = None
-            log_fn(f"[AUTO] Waiting for PROCESSED... PDFs remaining: {n}")
+            log_fn(f"[AUTO] Waiting PROCESSED drain | remaining: {n}")
         if (time.time() - start) >= max_wait:
             log_fn(f"[AUTO] PROCESSED timeout after {max_wait}s.")
             return False
@@ -151,6 +151,8 @@ class App(tk.Tk):
 
         self.awb_proc        = None
         self.edm_proc        = None
+        self.batch_running   = False
+        self.auto_phase      = "Idle"
         self.auto_running    = False
         self.auto_stop_event = threading.Event()
         self.auto_thread     = None
@@ -170,6 +172,29 @@ class App(tk.Tk):
                                    self.btn_clear_all, self.btn_auto, self.btn_clear_log]):
             b.grid(row=0, column=col, padx=4, pady=5)
 
+        # ── Open folder shortcuts ─────────────────────────────────────────────
+        open_btn = tk.Frame(self)
+        open_btn.pack(fill="x", padx=10, pady=(0, 6))
+
+        self.btn_open_inbox = tk.Button(open_btn, text="Open INBOX", width=13, command=lambda: self.open_folder(config.INBOX_DIR))
+        self.btn_open_clean = tk.Button(open_btn, text="Open CLEAN", width=13, command=lambda: self.open_folder(config.CLEAN_DIR))
+        self.btn_open_rejected = tk.Button(open_btn, text="Open REJECTED", width=13, command=lambda: self.open_folder(config.REJECTED_DIR))
+        self.btn_open_review = tk.Button(open_btn, text="Open NEEDS_REVIEW", width=17, command=lambda: self.open_folder(config.NEEDS_REVIEW_DIR))
+        self.btn_open_out = tk.Button(open_btn, text="Open OUT", width=13, command=lambda: self.open_folder(config.OUT_DIR))
+
+        for col, b in enumerate([self.btn_open_inbox, self.btn_open_clean, self.btn_open_rejected, self.btn_open_review, self.btn_open_out]):
+            b.grid(row=0, column=col, padx=4, pady=3)
+
+        # ── Live status indicator ─────────────────────────────────────────────
+        live_frame = tk.Frame(self, bd=1, relief="groove")
+        live_frame.pack(fill="x", padx=10, pady=(0, 4))
+        self.lbl_live_awb = tk.Label(live_frame, text="AWB: OFF", width=18, anchor="w")
+        self.lbl_live_edm = tk.Label(live_frame, text="EDM: OFF", width=18, anchor="w")
+        self.lbl_live_batch = tk.Label(live_frame, text="BATCH: IDLE", width=18, anchor="w")
+        self.lbl_live_auto = tk.Label(live_frame, text="AUTO: OFF | Idle", width=26, anchor="w")
+        for i, lbl in enumerate([self.lbl_live_awb, self.lbl_live_edm, self.lbl_live_batch, self.lbl_live_auto]):
+            lbl.grid(row=0, column=i, padx=8, pady=2)
+
         # ── Folder counts bar ─────────────────────────────────────────────────
         counts_frame = tk.Frame(self, bd=1, relief="sunken")
         counts_frame.pack(fill="x", padx=10, pady=(0, 4))
@@ -184,6 +209,7 @@ class App(tk.Tk):
         for i, lbl in enumerate([self.lbl_inbox, self.lbl_processed, self.lbl_clean,
                                    self.lbl_rejected, self.lbl_review, self.lbl_out]):
             lbl.grid(row=0, column=i, padx=8, pady=2)
+        self.default_fg = self.lbl_inbox.cget("fg")
 
         # ── Status ────────────────────────────────────────────────────────────
         self.status_var = tk.StringVar(value="Ready.")
@@ -200,6 +226,7 @@ class App(tk.Tk):
         self.log_append(f"MASTER DB (protected): {config.AWB_EXCEL_PATH}")
         self.log_append(f"AWB Logs (protected):  {config.AWB_LOGS_PATH}")
         self.log_append("Ready.")
+        self._refresh_live_status()
 
         self._start_count_refresh()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -207,6 +234,7 @@ class App(tk.Tk):
     # ── Folder count refresh ──────────────────────────────────────────────────
     def _start_count_refresh(self):
         self._refresh_counts()
+        self._refresh_live_status()
         self.after(3000, self._start_count_refresh)
 
     def _refresh_counts(self):
@@ -214,20 +242,71 @@ class App(tk.Tk):
             try:
                 return len(list(folder.glob("*.pdf")))
             except Exception:
-                return "?"
+                return None
 
         def count_batches():
             try:
                 return len(list(config.OUT_DIR.glob(f"{config.PRINT_STACK_BASENAME}_*.pdf")))
             except Exception:
-                return "?"
+                return None
 
-        self.lbl_inbox.config(    text=f"INBOX: {count_pdfs(config.INBOX_DIR)}")
-        self.lbl_processed.config(text=f"PROCESSED: {count_pdfs(config.PROCESSED_DIR)}")
-        self.lbl_clean.config(    text=f"CLEAN: {count_pdfs(config.CLEAN_DIR)}")
-        self.lbl_rejected.config( text=f"REJECTED: {count_pdfs(config.REJECTED_DIR)}")
-        self.lbl_review.config(   text=f"NEEDS_REVIEW: {count_pdfs(config.NEEDS_REVIEW_DIR)}")
-        self.lbl_out.config(      text=f"OUT batches: {count_batches()}")
+        inbox_n = count_pdfs(config.INBOX_DIR)
+        processed_n = count_pdfs(config.PROCESSED_DIR)
+        clean_n = count_pdfs(config.CLEAN_DIR)
+        rejected_n = count_pdfs(config.REJECTED_DIR)
+        review_n = count_pdfs(config.NEEDS_REVIEW_DIR)
+        out_n = count_batches()
+
+        self.lbl_inbox.config(text=f"INBOX: {inbox_n if inbox_n is not None else '?'}", fg=self.default_fg)
+        self.lbl_processed.config(text=f"PROCESSED: {processed_n if processed_n is not None else '?'}", fg=self.default_fg)
+        self.lbl_clean.config(text=f"CLEAN: {clean_n if clean_n is not None else '?'}", fg="#1f7a1f")
+        self.lbl_rejected.config(text=f"REJECTED: {rejected_n if rejected_n is not None else '?'}", fg="#b42318")
+        self.lbl_review.config(text=f"NEEDS_REVIEW: {review_n if review_n is not None else '?'}", fg="#b54708")
+        self.lbl_out.config(text=f"OUT batches: {out_n if out_n is not None else '?'}", fg=self.default_fg)
+
+    def _refresh_live_status(self):
+        self.lbl_live_awb.config(
+            text=f"AWB: {'RUNNING' if self.is_awb_running() else 'OFF'}",
+            fg=("#1f7a1f" if self.is_awb_running() else "#b42318"),
+        )
+        self.lbl_live_edm.config(
+            text=f"EDM: {'RUNNING' if self.is_edm_running() else 'OFF'}",
+            fg=("#1f7a1f" if self.is_edm_running() else "#b42318"),
+        )
+        self.lbl_live_batch.config(
+            text=f"BATCH: {'RUNNING' if self.batch_running else 'IDLE'}",
+            fg=("#0c6db0" if self.batch_running else self.default_fg),
+        )
+        auto_text = f"AUTO: {'ON' if self.auto_running else 'OFF'} | {self.auto_phase}"
+        self.lbl_live_auto.config(
+            text=auto_text,
+            fg=("#1f7a1f" if self.auto_running else self.default_fg),
+        )
+
+    def _set_auto_phase(self, phase):
+        self.auto_phase = phase
+        self.after(0, self._refresh_live_status)
+
+    def _set_batch_running(self, running: bool):
+        self.batch_running = running
+        self.after(0, lambda: self.btn_batch.config(state=("disabled" if running else "normal")))
+        self.after(0, self._refresh_live_status)
+
+    def open_folder(self, folder: Path):
+        folder = Path(folder)
+        if not folder.exists():
+            self.log_append(f"[OPEN] Folder not found: {folder}")
+            return
+        try:
+            if os.name == "nt":
+                os.startfile(str(folder))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+            self.log_append(f"[OPEN] {folder}")
+        except Exception as e:
+            self.log_append(f"[OPEN ERROR] Could not open {folder}: {e}")
 
     # ── UI helpers ────────────────────────────────────────────────────────────
     def clear_log(self):
@@ -291,6 +370,7 @@ class App(tk.Tk):
         self.log_append("\n=== Get AWB started ===")
         self.awb_proc = self._popen_utf8(SCRIPT_GET_AWB)
         self.btn_get_awb.config(text="Stop Get AWB")
+        self._refresh_live_status()
 
         def reader():
             try:
@@ -301,6 +381,7 @@ class App(tk.Tk):
             rc = self.awb_proc.wait()
             self.awb_proc = None
             self.after(0, lambda: self.btn_get_awb.config(text="Start Get AWB"))
+            self.after(0, self._refresh_live_status)
             self.set_status("Get AWB stopped." if rc == 0 else "Get AWB ended with errors.")
 
         threading.Thread(target=reader, daemon=True).start()
@@ -309,6 +390,7 @@ class App(tk.Tk):
         if not self.is_awb_running():
             self.awb_proc = None
             self.btn_get_awb.config(text="Start Get AWB")
+            self._refresh_live_status()
             return
         self.log_append("Stopping Get AWB...")
         try:
@@ -334,6 +416,7 @@ class App(tk.Tk):
         self.edm_proc = self._popen_utf8(SCRIPT_EDM_CHECKER)
         self.btn_edm.config(text="Stop EDM Checker")
         self.set_status("EDM Checker running...")
+        self._refresh_live_status()
 
         def reader():
             try:
@@ -344,6 +427,7 @@ class App(tk.Tk):
             rc = self.edm_proc.wait()
             self.edm_proc = None
             self.after(0, lambda: self.btn_edm.config(text="Start EDM Checker"))
+            self.after(0, self._refresh_live_status)
             self.log_append(f"[EDM] Process ended (exit {rc}).")
 
         threading.Thread(target=reader, daemon=True).start()
@@ -352,6 +436,7 @@ class App(tk.Tk):
         if not self.is_edm_running():
             self.edm_proc = None
             self.btn_edm.config(text="Start EDM Checker")
+            self._refresh_live_status()
             return
         self.log_append("Stopping EDM Checker...")
         try:
@@ -366,18 +451,34 @@ class App(tk.Tk):
         self.stop_edm_checker() if self.is_edm_running() else self.start_edm_checker()
 
     # ── Prepare Batch ─────────────────────────────────────────────────────────
-    def on_prepare_batch(self):
-        def job():
-            n = clean_pdf_count()
-            if n == 0:
-                self.log_append("[BATCH] CLEAN folder is empty -- nothing to batch.")
-                self.set_status("CLEAN is empty.")
-                return
+    def _run_batch_once(self, tag="[BATCH]"):
+        if self.batch_running:
+            self.log_append(f"{tag} Batch already running -- skipping duplicate trigger.")
+            return
+        n = clean_pdf_count()
+        if n == 0:
+            self.log_append(f"{tag} CLEAN folder is empty -- nothing to batch.")
+            self.set_status("CLEAN is empty.")
+            return
+
+        self._set_batch_running(True)
+        try:
             self.set_status(f"Building batch from {n} CLEAN file(s)...")
-            self.log_append(f"\n=== Prepare Batch ({n} file(s) in CLEAN) ===")
+            self.log_append(f"\n=== {tag} Prepare Batch ({n} file(s) in CLEAN) ===")
+            self.log_append(f"{tag} Batching now")
             self.run_script_blocking_live(SCRIPT_PRINT_BATCH)
-            self.log_append("[BATCH] Batch complete. CLEAN sources deleted. Batches saved to OUT.")
+            self.log_append(f"{tag} Batch complete. CLEAN sources deleted. Batches saved to OUT.")
             self.set_status("Batch complete.")
+        finally:
+            self._set_batch_running(False)
+
+    def on_prepare_batch(self):
+        if self.batch_running:
+            self.log_append("[BATCH] Batch already running.")
+            return
+
+        def job():
+            self._run_batch_once(tag="[BATCH]")
 
         self.run_in_thread(job)
 
@@ -424,9 +525,12 @@ class App(tk.Tk):
         self.auto_running = True
         self.auto_stop_event.clear()
         self.btn_auto.config(text="Stop AUTO MODE")
+        self._set_auto_phase("Idle")
         self.set_status("AUTO MODE running...")
         self.log_append("\n=== AUTO MODE STARTED ===")
         self.log_append("Flow: wait INBOX empty -> wait PROCESSED empty -> Prepare Batch -> repeat")
+        self.log_append("[AUTO] Idle")
+        self._refresh_live_status()
 
         if not self.is_awb_running():
             self.start_awb()
@@ -437,27 +541,29 @@ class App(tk.Tk):
             while not self.auto_stop_event.is_set():
                 try:
                     if AUTO_WAIT_FOR_INBOX_EMPTY:
+                        self._set_auto_phase("Waiting INBOX empty")
+                        self.log_append("[AUTO] Waiting INBOX empty")
                         ok = wait_until_inbox_empty(
                             self.log_append,
                             INBOX_EMPTY_STABLE_SECONDS,
                             INBOX_EMPTY_MAX_WAIT,
                         )
                         if ok:
+                            self._set_auto_phase("Waiting PROCESSED drain")
+                            self.log_append("[AUTO] Waiting PROCESSED drain")
                             done = wait_until_processed_empty(
                                 self.log_append,
                                 PROCESSED_EMPTY_STABLE_SECONDS,
                                 PROCESSED_EMPTY_MAX_WAIT,
                             )
                             if done:
-                                n = clean_pdf_count()
-                                if n == 0:
-                                    self.log_append("[AUTO] CLEAN is empty -- nothing to batch yet.")
-                                else:
-                                    self.log_append(f"[AUTO] Building batch from {n} CLEAN file(s)...")
-                                    self.run_script_blocking_live(SCRIPT_PRINT_BATCH)
-                                    self.log_append("[AUTO] Batch complete. CLEAN sources deleted.")
+                                self._set_auto_phase("Batching now")
+                                self._run_batch_once(tag="[AUTO]")
+                                self._set_auto_phase("Idle")
+                                self.log_append("[AUTO] Idle")
                 except Exception as e:
                     self.log_append(f"[AUTO ERROR] {e}")
+                    self._set_auto_phase("Idle")
 
                 for _ in range(AUTO_INTERVAL_SEC):
                     if self.auto_stop_event.is_set():
@@ -465,7 +571,9 @@ class App(tk.Tk):
                     time.sleep(1)
 
             self.log_append("\n=== AUTO MODE STOPPED ===")
+            self.log_append("[AUTO] Idle")
             self.set_status("Ready.")
+            self._set_auto_phase("Idle")
 
         self.auto_thread = threading.Thread(target=loop, daemon=True)
         self.auto_thread.start()
@@ -476,6 +584,8 @@ class App(tk.Tk):
         self.auto_running = False
         self.auto_stop_event.set()
         self.btn_auto.config(text="Start AUTO MODE")
+        self._set_auto_phase("Idle")
+        self._refresh_live_status()
         self.log_append("\nStopping AUTO MODE...")
         self.set_status("Stopping...")
 

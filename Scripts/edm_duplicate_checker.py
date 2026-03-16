@@ -78,8 +78,26 @@ log = logging.getLogger("EDMChecker")
 # =========================
 def _awb_from_processed_filename(filename):
     base = os.path.splitext(filename)[0]
+    # Primary pattern: 123456789012.pdf or 123456789012_2.pdf
+    m = re.match(r"^(\d{12})(?:_\d+)?$", base)
+    if m:
+        return m.group(1)
+    # Fallback: keep backward compatibility with older names
     m = re.match(r"^(\d{12})", base)
-    return m.group(1) if m else base
+    return m.group(1) if m else None
+
+
+def _ms(start_ts):
+    return round((time.perf_counter() - start_ts) * 1000, 1)
+
+
+def _log_timing(awb, filename, t):
+    log.info(
+        "[TIMING] file=%s awb=%s metadata_ms=%.1f download_ms=%.1f extract_ms=%.1f "
+        "compare_ms=%.1f route_ms=%.1f total_active_ms=%.1f",
+        filename, awb, t["metadata_ms"], t["download_ms"], t["extract_ms"],
+        t["compare_ms"], t["route_ms"], t["total_active_ms"]
+    )
 
 
 # =========================
@@ -630,6 +648,15 @@ def find_duplicate_pages(incoming_path, edm_pdf_list):
 # MAIN FILE PROCESSOR
 # =========================
 def process_file(filepath):
+    total_start = time.perf_counter()
+    t = {
+        "metadata_ms": 0.0,
+        "download_ms": 0.0,
+        "extract_ms": 0.0,
+        "compare_ms": 0.0,
+        "route_ms": 0.0,
+        "total_active_ms": 0.0,
+    }
     filename = os.path.basename(filepath)
     awb = _awb_from_processed_filename(filename)
 
@@ -637,48 +664,79 @@ def process_file(filepath):
     log.info(f"File:  {filename}")
     log.info(f"AWB:   {awb}")
 
+    if not awb:
+        log.warning(f"Invalid filename format for AWB extraction: {filename} -- moving to NEEDS_REVIEW")
+        safe_move(filepath, NEEDS_REVIEW_FOLDER, filename)
+        return
+
     record_edm_start(filename)
 
     log.info("Querying EDM...")
+    meta_start = time.perf_counter()
     doc_ids = get_document_ids(awb)
+    t["metadata_ms"] = _ms(meta_start)
+    log.info(f"[TIMING] metadata call completed in {t['metadata_ms']} ms")
 
     if doc_ids is None:
+        t["total_active_ms"] = _ms(total_start)
+        _log_timing(awb, filename, t)
         log.error("Stopping -- token expired. Update EDM_TOKEN in .env and restart.")
         sys.exit(1)
 
     if not doc_ids:
+        route_start = time.perf_counter()
         log.info("AWB not in EDM -- passing through as new")
         safe_move(filepath, CLEAN_FOLDER, filename)
         log.info("RESULT: NEW -> CLEAN")
         append_to_csv(filename)
         append_edm_result_to_awb_logs(awb, filename, result="CLEAN", reason="AWB not found in EDM", match_stats="N/A")
         record_edm_end(filename, edm_result="CLEAN", final_folder="CLEAN")
+        t["route_ms"] = _ms(route_start)
+        t["total_active_ms"] = _ms(total_start)
+        _log_timing(awb, filename, t)
         return
 
     log.info(f"Found {len(doc_ids)} existing doc(s) in EDM")
     log.info("Downloading from EDM...")
+    dl_start = time.perf_counter()
     zip_bytes = download_edm_zip(doc_ids)
+    t["download_ms"] = _ms(dl_start)
+    log.info(f"[TIMING] EDM download completed in {t['download_ms']} ms")
 
     if not zip_bytes:
+        route_start = time.perf_counter()
         log.warning("Could not download from EDM -- passing through unchecked")
         safe_move(filepath, CLEAN_FOLDER, filename)
         append_to_csv(filename)
         append_edm_result_to_awb_logs(awb, filename, result="CLEAN-UNCHECKED", reason="EDM download failed", match_stats="N/A")
         record_edm_end(filename, edm_result="CLEAN-UNCHECKED", final_folder="CLEAN", notes="EDM download failed")
+        t["route_ms"] = _ms(route_start)
+        t["total_active_ms"] = _ms(total_start)
+        _log_timing(awb, filename, t)
         return
 
+    extract_start = time.perf_counter()
     edm_pdf_list = extract_pdfs_from_zip(zip_bytes)
+    t["extract_ms"] = _ms(extract_start)
+    log.info(f"[TIMING] EDM ZIP extraction completed in {t['extract_ms']} ms")
     if not edm_pdf_list:
+        route_start = time.perf_counter()
         log.warning("No PDFs in EDM ZIP -- passing through unchecked")
         safe_move(filepath, CLEAN_FOLDER, filename)
         append_to_csv(filename)
         append_edm_result_to_awb_logs(awb, filename, result="CLEAN-UNCHECKED", reason="EDM ZIP empty or unreadable", match_stats="N/A")
         record_edm_end(filename, edm_result="CLEAN-UNCHECKED", final_folder="CLEAN", notes="EDM ZIP empty or unreadable")
+        t["route_ms"] = _ms(route_start)
+        t["total_active_ms"] = _ms(total_start)
+        _log_timing(awb, filename, t)
         return
 
     log.info(f"Extracted {len(edm_pdf_list)} PDF(s) from EDM ZIP")
     log.info("Comparing pages...")
+    compare_start = time.perf_counter()
     duplicate_pages = find_duplicate_pages(filepath, edm_pdf_list)
+    t["compare_ms"] = _ms(compare_start)
+    log.info(f"[TIMING] page comparison completed in {t['compare_ms']} ms")
 
     incoming_doc = fitz.open(filepath)
     total_pages = len(incoming_doc)
@@ -689,20 +747,28 @@ def process_file(filepath):
 
     # Case 1: No duplicates
     if not duplicate_pages:
+        route_start = time.perf_counter()
         log.info("RESULT: NO duplicates -> CLEAN")
         safe_move(filepath, CLEAN_FOLDER, filename)
         append_to_csv(filename)
         append_edm_result_to_awb_logs(awb, filename, result="CLEAN", reason="No matching pages found in EDM", match_stats=match_stats)
         record_edm_end(filename, edm_result="CLEAN", final_folder="CLEAN")
+        t["route_ms"] = _ms(route_start)
+        t["total_active_ms"] = _ms(total_start)
+        _log_timing(awb, filename, t)
         return
 
     # Case 2: All pages duplicate
     if len(duplicate_pages) == total_pages:
+        route_start = time.perf_counter()
         log.info(f"RESULT: ALL {total_pages} page(s) are duplicates -> REJECTED")
         safe_move(filepath, REJECTED_FOLDER, filename)
         append_to_rejected_sheet(filename, reason=f"All {total_pages} page(s) matched EDM", match_stats=match_stats)
         append_edm_result_to_awb_logs(awb, filename, result="REJECTED", reason=f"All {total_pages} page(s) matched EDM", match_stats=match_stats)
         record_edm_end(filename, edm_result="REJECTED", final_folder="REJECTED")
+        t["route_ms"] = _ms(route_start)
+        t["total_active_ms"] = _ms(total_start)
+        _log_timing(awb, filename, t)
         return
 
     # Case 3: Mixed -- strip duplicates
@@ -712,6 +778,7 @@ def process_file(filepath):
     log.info(f"  Keeping page(s):   {[p + 1 for p in clean_pages]}")
 
     try:
+        route_start = time.perf_counter()
         src_doc = fitz.open(filepath)
 
         stripped_doc = fitz.open()
@@ -745,14 +812,21 @@ def process_file(filepath):
             match_stats=match_stats)
         record_edm_end(filename, edm_result="PARTIAL-CLEAN", final_folder="CLEAN",
                        notes=f"Pages {[p+1 for p in sorted(duplicate_pages)]} removed")
+        t["route_ms"] = _ms(route_start)
+        t["total_active_ms"] = _ms(total_start)
+        _log_timing(awb, filename, t)
 
     except Exception as e:
+        route_start = time.perf_counter()
         log.warning(f"Error stripping pages: {e} -- sending original to NEEDS_REVIEW")
         safe_move(filepath, NEEDS_REVIEW_FOLDER, filename)
         append_edm_result_to_awb_logs(awb, filename, result="NEEDS-REVIEW",
             reason=f"Page stripping failed: {e}", match_stats=match_stats)
         record_edm_end(filename, edm_result="NEEDS-REVIEW", final_folder="NEEDS_REVIEW",
                        notes=f"Page stripping failed: {e}")
+        t["route_ms"] = _ms(route_start)
+        t["total_active_ms"] = _ms(total_start)
+        _log_timing(awb, filename, t)
 
 
 # =========================
@@ -791,7 +865,7 @@ if __name__ == "__main__":
     log.info(f"CSV written to: {CSV_PATH} (CLEAN outcomes only)")
     log.info("Token source: EDM_TOKEN in .env")
 
-    existing = [f for f in PROCESSED_FOLDER.iterdir() if f.suffix == ".pdf"]
+    existing = [f for f in PROCESSED_FOLDER.iterdir() if f.suffix.lower() == ".pdf"]
     if existing:
         log.info(f"Found {len(existing)} existing file(s) -- processing now")
         for fp in existing:
