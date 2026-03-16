@@ -1,6 +1,35 @@
-.DS_Store
+# AWB Pipeline .gitignore
+
+# Local environment config - NEVER commit
+.env
+env-2
+token.txt
+Extras/env file
+
+# Runtime folders (created automatically)
+pdf_organizer/
+data/
+logs/
+Manual_Libraries/
+
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
+.venv/
 venv/
-.env
-*.log
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Stray copied runtime path folder names from cross-platform moves
+C:\\Users\\*

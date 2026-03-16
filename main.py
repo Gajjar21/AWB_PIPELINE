@@ -37,6 +37,8 @@ AUTO_INTERVAL_SEC          = config.AUTO_INTERVAL_SEC
 AUTO_WAIT_FOR_INBOX_EMPTY  = config.AUTO_WAIT_FOR_INBOX_EMPTY
 INBOX_EMPTY_STABLE_SECONDS = config.INBOX_EMPTY_STABLE_SECONDS
 INBOX_EMPTY_MAX_WAIT       = config.INBOX_EMPTY_MAX_WAIT
+PROCESSED_EMPTY_STABLE_SECONDS = config.PROCESSED_EMPTY_STABLE_SECONDS
+PROCESSED_EMPTY_MAX_WAIT       = config.PROCESSED_EMPTY_MAX_WAIT
 
 
 # =========================
@@ -93,6 +95,10 @@ def clean_pdf_count():
     return len(list(config.CLEAN_DIR.glob("*.pdf")))
 
 
+def processed_pdf_count():
+    return len(list(config.PROCESSED_DIR.glob("*.pdf")))
+
+
 def wait_until_inbox_empty(log_fn, stable_seconds=8, max_wait=1800):
     start = time.time()
     empty_since = None
@@ -109,6 +115,26 @@ def wait_until_inbox_empty(log_fn, stable_seconds=8, max_wait=1800):
             log_fn(f"[AUTO] Waiting for INBOX... PDFs remaining: {n}")
         if (time.time() - start) >= max_wait:
             log_fn(f"[AUTO] Timeout after {max_wait}s.")
+            return False
+        time.sleep(2)
+
+
+def wait_until_processed_empty(log_fn, stable_seconds=5, max_wait=600):
+    start = time.time()
+    empty_since = None
+    while True:
+        n = processed_pdf_count()
+        if n == 0:
+            if empty_since is None:
+                empty_since = time.time()
+                log_fn(f"[AUTO] PROCESSED empty. Waiting {stable_seconds}s to confirm...")
+            if (time.time() - empty_since) >= stable_seconds:
+                return True
+        else:
+            empty_since = None
+            log_fn(f"[AUTO] Waiting for PROCESSED... PDFs remaining: {n}")
+        if (time.time() - start) >= max_wait:
+            log_fn(f"[AUTO] PROCESSED timeout after {max_wait}s.")
             return False
         time.sleep(2)
 
@@ -361,7 +387,7 @@ class App(tk.Tk):
             "Confirm Clear All",
             "Clears INBOX and OUT working files + run CSV.\n"
             "Does NOT touch: PROCESSED, CLEAN, REJECTED, NEEDS_REVIEW,\n"
-            "awb_list.xlsx, AWB_Logs.xlsx.\n\nContinue?"
+            "AWB_dB.xlsx, AWB_Logs.xlsx.\n\nContinue?"
         ):
             return
 
@@ -400,7 +426,7 @@ class App(tk.Tk):
         self.btn_auto.config(text="Stop AUTO MODE")
         self.set_status("AUTO MODE running...")
         self.log_append("\n=== AUTO MODE STARTED ===")
-        self.log_append("Flow: wait INBOX empty -> EDM flush (5s) -> Prepare Batch -> repeat")
+        self.log_append("Flow: wait INBOX empty -> wait PROCESSED empty -> Prepare Batch -> repeat")
 
         if not self.is_awb_running():
             self.start_awb()
@@ -417,15 +443,19 @@ class App(tk.Tk):
                             INBOX_EMPTY_MAX_WAIT,
                         )
                         if ok:
-                            self.log_append("[AUTO] Giving EDM checker 5s to flush PROCESSED...")
-                            time.sleep(5)
-                            n = clean_pdf_count()
-                            if n == 0:
-                                self.log_append("[AUTO] CLEAN is empty -- nothing to batch yet.")
-                            else:
-                                self.log_append(f"[AUTO] Building batch from {n} CLEAN file(s)...")
-                                self.run_script_blocking_live(SCRIPT_PRINT_BATCH)
-                                self.log_append("[AUTO] Batch complete. CLEAN sources deleted.")
+                            done = wait_until_processed_empty(
+                                self.log_append,
+                                PROCESSED_EMPTY_STABLE_SECONDS,
+                                PROCESSED_EMPTY_MAX_WAIT,
+                            )
+                            if done:
+                                n = clean_pdf_count()
+                                if n == 0:
+                                    self.log_append("[AUTO] CLEAN is empty -- nothing to batch yet.")
+                                else:
+                                    self.log_append(f"[AUTO] Building batch from {n} CLEAN file(s)...")
+                                    self.run_script_blocking_live(SCRIPT_PRINT_BATCH)
+                                    self.log_append("[AUTO] Batch complete. CLEAN sources deleted.")
                 except Exception as e:
                     self.log_append(f"[AUTO ERROR] {e}")
 

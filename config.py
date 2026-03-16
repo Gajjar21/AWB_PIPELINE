@@ -3,7 +3,7 @@
 # All scripts import from here -- no hardcoded paths anywhere else.
 #
 # On first run (or after pulling to a new machine):
-#   cp .env.example .env      <- fill in your local values
+#   create/edit .env with your local values
 #   python config.py          <- verifies all paths are valid
 
 import os
@@ -19,7 +19,7 @@ _ENV_PATH = _HERE / ".env"
 if not _ENV_PATH.exists():
     print(
         f"\n[config] ERROR: .env not found at {_ENV_PATH}\n"
-        "  Run:  cp .env.example .env   then edit it with your local values.\n"
+        "  Create a .env file in this folder, then set your local values.\n"
     )
     sys.exit(1)
 
@@ -61,7 +61,7 @@ PENDING_PRINT_DIR = ORGANIZER_DIR / "PENDING_PRINT"
 # ── Data files ────────────────────────────────────────────────────────────────
 DATA_DIR         = BASE_DIR / "data"
 OUT_DIR          = DATA_DIR / "OUT"
-AWB_EXCEL_PATH   = DATA_DIR / "awb_list.xlsx"
+AWB_EXCEL_PATH   = DATA_DIR / "AWB_dB.xlsx"
 AWB_LOGS_PATH    = DATA_DIR / "AWB_Logs.xlsx"
 TRACKER_PATH     = DATA_DIR / "pipeline_tracker.xlsx"
 CSV_PATH         = OUT_DIR  / "awb_list.csv"
@@ -132,6 +132,8 @@ AUTO_INTERVAL_SEC           = 10
 AUTO_WAIT_FOR_INBOX_EMPTY   = True
 INBOX_EMPTY_STABLE_SECONDS  = 8
 INBOX_EMPTY_MAX_WAIT        = 1800
+PROCESSED_EMPTY_STABLE_SECONDS = _int("PROCESSED_EMPTY_STABLE_SECONDS", 5)
+PROCESSED_EMPTY_MAX_WAIT       = _int("PROCESSED_EMPTY_MAX_WAIT", 600)
 
 # ── Protected files (never deleted by Clear All) ──────────────────────────────
 PROTECTED_FILES = {AWB_EXCEL_PATH, AWB_LOGS_PATH}

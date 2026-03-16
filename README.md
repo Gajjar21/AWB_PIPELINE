@@ -13,8 +13,7 @@ AWB_PIPELINE/
 ├── config.py                  # Central config - imports from .env
 ├── main.py                    # UI entry point
 ├── requirements.txt
-├── .env                       # Local config - NOT in git (copy from .env.example)
-├── .env.example               # Template - safe to commit
+├── .env                       # Local config - NOT in git
 │
 ├── Scripts/
 │   ├── awb_hotfolder.py       # Watches INBOX, OCR matches AWB numbers
@@ -32,7 +31,7 @@ AWB_PIPELINE/
 │   └── PENDING_PRINT/         # TIFF output
 │
 ├── data/                      # Runtime data - NOT in git
-│   ├── awb_list.xlsx          # Master AWB reference list
+│   ├── AWB_dB.xlsx            # Master AWB reference list
 │   ├── AWB_Logs.xlsx          # Match + EDM result log
 │   ├── pipeline_tracker.xlsx  # Processing time tracker
 │   └── OUT/                   # Batch PDFs + sequence Excel
@@ -96,11 +95,7 @@ pip install -r requirements.txt
 
 ### 4. Configure your .env
 
-```bash
-cp .env.example .env
-```
-
-Then edit `.env` with your local values:
+Create/edit `.env` in the project root with your local values:
 
 | Variable | Mac example | Windows example |
 |---|---|---|
