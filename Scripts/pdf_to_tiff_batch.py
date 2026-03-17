@@ -4,7 +4,6 @@
 # All paths and settings come from config.py / .env.
 # No hardcoded paths in this file.
 
-import os
 import sys
 from pathlib import Path
 

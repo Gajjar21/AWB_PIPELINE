@@ -7,7 +7,6 @@
 import os
 import sys
 import json
-import glob
 import subprocess
 import threading
 import time
@@ -44,15 +43,6 @@ PROCESSED_EMPTY_MAX_WAIT       = config.PROCESSED_EMPTY_MAX_WAIT
 # =========================
 # HELPERS
 # =========================
-def load_state():
-    if not STATE_FILE.exists():
-        return {"last_run_id": None}
-    try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return {"last_run_id": None}
-
-
 def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 

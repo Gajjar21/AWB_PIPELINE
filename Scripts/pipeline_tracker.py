@@ -381,30 +381,6 @@ def get_summary():
     return counts
 
 
-def get_stale_records(stale_threshold_seconds=600):
-    stale = []
-    cutoff = time.time() - stale_threshold_seconds
-    try:
-        wb, ws = _load_or_create()
-        for row in range(2, ws.max_row + 1):
-            status = _get(ws, row, "Status")
-            hot_start = _get(ws, row, "HotFolder_Start")
-            filename = _get(ws, row, "OriginalFilename")
-            awb = _get(ws, row, "AWB")
-            if status != "IN-PROGRESS":
-                continue
-            if hot_start:
-                try:
-                    ts = datetime.strptime(hot_start, "%Y-%m-%d %H:%M:%S").timestamp()
-                    if ts < cutoff:
-                        stale.append({"filename": filename, "awb": awb, "since": hot_start})
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return stale
-
-
 # ── Self-test ─────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("Testing pipeline_tracker.py...")

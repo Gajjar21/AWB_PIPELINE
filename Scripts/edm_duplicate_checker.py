@@ -42,7 +42,6 @@ from Scripts.audit_logger import audit_event
 PROCESSED_FOLDER    = config.PROCESSED_DIR
 CLEAN_FOLDER        = config.CLEAN_DIR
 REJECTED_FOLDER     = config.REJECTED_DIR
-NEEDS_REVIEW_FOLDER = config.NEEDS_REVIEW_DIR
 AWB_LOGS_PATH       = config.AWB_LOGS_PATH
 CSV_PATH            = config.CSV_PATH
 TESSERACT_PATH      = str(config.TESSERACT_PATH)
@@ -57,7 +56,6 @@ DOWNLOAD_URL      = config.EDM_DOWNLOAD_URL
 # ── Tuning from config ────────────────────────────────────────────────────────
 FILE_SETTLE_SECONDS         = config.FILE_SETTLE_SECONDS
 TEXT_SIMILARITY_THRESHOLD   = config.TEXT_SIMILARITY_THRESHOLD
-OCR_TOP_PERCENT             = config.OCR_TOP_PERCENT
 PHASH_THRESHOLD             = config.PHASH_THRESHOLD
 PAGE_OCR_LIMIT              = config.PAGE_OCR_LIMIT
 MIN_EMBEDDED_TEXT_LENGTH    = config.MIN_EMBEDDED_TEXT_LENGTH
@@ -100,6 +98,8 @@ _SUMMARY_HEADERS = [
     "EDM_Check_Minutes",
     "TOTAL_Minutes_AWB_plus_EDM",
     "Total_Pages",
+    "Rejected_Page_Count",
+    "True_Clean_Page_Count",
     "Duplicate_Pages",
     "Pages_To_Clean",
     "Decision_Trace",
@@ -529,26 +529,6 @@ def perceptual_hash_page(page):
         return None
 
 
-def extract_embedded_text(page, top_percent=100, page_index=0):
-    text = ""
-    try:
-        rect = page.rect
-        clip = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + rect.height * top_percent / 100)
-        text = page.get_text("text", clip=clip).strip().lower()
-    except Exception as e:
-        log.warning(f"Error extracting embedded text: {e}")
-
-    if len(text) < MIN_EMBEDDED_TEXT_LENGTH:
-        if page_index < PAGE_OCR_LIMIT:
-            log.info(f"    Page {page_index+1}: embedded text too short ({len(text)} chars) -- using OCR fallback")
-            ocr_text = extract_ocr_text(page, top_percent)
-            if ocr_text:
-                return ocr_text
-        else:
-            log.info(f"    Page {page_index+1}: embedded text too short but beyond PAGE_OCR_LIMIT -- skipping OCR")
-    return text
-
-
 def extract_embedded_text_only(page, top_percent=100):
     """Embedded text only (no OCR fallback)."""
     try:
@@ -645,10 +625,47 @@ def page_is_cargo_control_document(page):
 # =========================
 # AWB LOGS WRITER
 # =========================
-def append_edm_result_to_awb_logs(awb, filename, result, reason, match_stats):
+def append_edm_result_to_awb_logs(
+    awb,
+    filename,
+    result,
+    reason,
+    match_stats,
+    total_pages=None,
+    rejected_page_count=None,
+    true_clean_page_count=None,
+    rejected_pages=None,
+    true_clean_pages=None,
+):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    row = [awb, filename, ts, "EDM-Check", result, reason, match_stats]
-    headers = ["AWB", "SourceFile", "Timestamp", "MatchMethod", "Status", "Reason", "MatchStats"]
+    row = [
+        awb,
+        filename,
+        ts,
+        "EDM-Check",
+        result,
+        reason,
+        match_stats,
+        total_pages if total_pages is not None else "",
+        rejected_page_count if rejected_page_count is not None else "",
+        true_clean_page_count if true_clean_page_count is not None else "",
+        str(rejected_pages or []),
+        str(true_clean_pages or []),
+    ]
+    headers = [
+        "AWB",
+        "SourceFile",
+        "Timestamp",
+        "MatchMethod",
+        "Status",
+        "Reason",
+        "MatchStats",
+        "Input_Page_Count",
+        "Rejected_Page_Count",
+        "True_Clean_Page_Count",
+        "Rejected_Pages",
+        "True_Clean_Pages",
+    ]
 
     for attempt in range(5):
         try:
@@ -656,9 +673,12 @@ def append_edm_result_to_awb_logs(awb, filename, result, reason, match_stats):
                 wb = load_workbook(AWB_LOGS_PATH)
                 ws = wb.active
                 existing_headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
-                for col, h in enumerate(headers, start=1):
+                next_col = ws.max_column + 1
+                for h in headers:
                     if h not in existing_headers:
-                        ws.cell(1, col).value = h
+                        ws.cell(1, next_col).value = h
+                        existing_headers.append(h)
+                        next_col += 1
             else:
                 AWB_LOGS_PATH.parent.mkdir(parents=True, exist_ok=True)
                 wb = Workbook()
@@ -1234,6 +1254,13 @@ def process_file(filepath):
         stage_awb_secs = float(stage_row.get("AWB_Extraction_Seconds") or 0)
     except Exception:
         stage_awb_secs = 0.0
+    input_total_pages = 0
+    try:
+        input_doc = fitz.open(filepath)
+        input_total_pages = len(input_doc)
+        input_doc.close()
+    except Exception as e:
+        log.warning(f"Could not read input page count for {filename}: {e}")
 
     def finalize_audit(status, route, reason, match_stats="N/A"):
         t["total_active_ms"] = _ms(total_start)
@@ -1257,13 +1284,25 @@ def process_file(filepath):
             cache=t.get("cache", "MISS"),
         )
 
-    def emit_pipeline_summary(edm_status, total_pages=0, duplicate_pages=None, clean_pages=None, dup_meta=None):
+    def emit_pipeline_summary(
+        edm_status,
+        total_pages=0,
+        duplicate_pages=None,
+        clean_pages=None,
+        dup_meta=None,
+        rejected_page_count=None,
+        true_clean_page_count=None,
+    ):
         duplicate_pages = duplicate_pages or []
         clean_pages = clean_pages or []
         dup_meta = dup_meta or {}
         methods = dup_meta.get("methods") or []
         score_summary = dup_meta.get("score_summary") or ""
         decision_trace = dup_meta.get("decision_trace") or ""
+        if rejected_page_count is None:
+            rejected_page_count = len(duplicate_pages)
+        if true_clean_page_count is None:
+            true_clean_page_count = len(clean_pages)
 
         edm_minutes = round((t.get("total_active_ms", 0.0) / 1000.0) / 60.0, 4)
         total_minutes = round((stage_awb_secs / 60.0) + edm_minutes, 4)
@@ -1280,6 +1319,8 @@ def process_file(filepath):
             "EDM_Check_Minutes": edm_minutes,
             "TOTAL_Minutes_AWB_plus_EDM": total_minutes,
             "Total_Pages": total_pages,
+            "Rejected_Page_Count": rejected_page_count,
+            "True_Clean_Page_Count": true_clean_page_count,
             "Duplicate_Pages": str(duplicate_pages),
             "Pages_To_Clean": str(clean_pages),
             "Decision_Trace": decision_trace,
@@ -1300,6 +1341,11 @@ def process_file(filepath):
             result="CLEAN-UNCHECKED",
             reason="Invalid filename format for AWB extraction",
             match_stats="N/A",
+            total_pages=input_total_pages,
+            rejected_page_count=0,
+            true_clean_page_count=input_total_pages,
+            rejected_pages=[],
+            true_clean_pages=list(range(1, input_total_pages + 1)),
         )
         record_edm_end(
             filename,
@@ -1308,7 +1354,12 @@ def process_file(filepath):
             notes="Invalid filename format for AWB extraction",
         )
         finalize_audit("CLEAN-UNCHECKED", "CLEAN", "Invalid filename format for AWB extraction")
-        emit_pipeline_summary("CLEAN-UNCHECKED")
+        emit_pipeline_summary(
+            "CLEAN-UNCHECKED",
+            total_pages=input_total_pages,
+            duplicate_pages=[],
+            clean_pages=list(range(1, input_total_pages + 1)),
+        )
         return
 
     # Keep cache only for the active AWB, clear before moving to next AWB.
@@ -1340,7 +1391,7 @@ def process_file(filepath):
 
         if doc_ids is None:
             finalize_audit("STOPPED", "STOP", "TOKEN EXPIRED")
-            emit_pipeline_summary("STOPPED")
+            emit_pipeline_summary("STOPPED", total_pages=input_total_pages, rejected_page_count=0, true_clean_page_count=0)
             log.error("Stopping -- token expired. Refresh token in data/token.txt or .env and restart.")
             sys.exit(1)
 
@@ -1365,11 +1416,29 @@ def process_file(filepath):
                 log.warning("Could not download from EDM -- passing through unchecked")
                 safe_move(filepath, CLEAN_FOLDER, filename)
                 append_to_csv(filename)
-                append_edm_result_to_awb_logs(awb, filename, result="CLEAN-UNCHECKED", reason="EDM download failed", match_stats="N/A")
+                append_edm_result_to_awb_logs(
+                    awb,
+                    filename,
+                    result="CLEAN-UNCHECKED",
+                    reason="EDM download failed",
+                    match_stats="N/A",
+                    total_pages=input_total_pages,
+                    rejected_page_count=0,
+                    true_clean_page_count=input_total_pages,
+                    rejected_pages=[],
+                    true_clean_pages=list(range(1, input_total_pages + 1)),
+                )
                 record_edm_end(filename, edm_result="CLEAN-UNCHECKED", final_folder="CLEAN", notes="EDM download failed")
                 t["route_ms"] = _ms(route_start)
                 finalize_audit("CLEAN-UNCHECKED", "CLEAN", "EDM download failed")
-                emit_pipeline_summary("CLEAN-UNCHECKED")
+                emit_pipeline_summary(
+                    "CLEAN-UNCHECKED",
+                    total_pages=input_total_pages,
+                    duplicate_pages=[],
+                    clean_pages=list(range(1, input_total_pages + 1)),
+                    rejected_page_count=0,
+                    true_clean_page_count=input_total_pages,
+                )
                 return
 
             extract_start = time.perf_counter()
@@ -1382,11 +1451,29 @@ def process_file(filepath):
                 log.warning("No PDFs in EDM ZIP -- passing through unchecked")
                 safe_move(filepath, CLEAN_FOLDER, filename)
                 append_to_csv(filename)
-                append_edm_result_to_awb_logs(awb, filename, result="CLEAN-UNCHECKED", reason="EDM ZIP empty or unreadable", match_stats="N/A")
+                append_edm_result_to_awb_logs(
+                    awb,
+                    filename,
+                    result="CLEAN-UNCHECKED",
+                    reason="EDM ZIP empty or unreadable",
+                    match_stats="N/A",
+                    total_pages=input_total_pages,
+                    rejected_page_count=0,
+                    true_clean_page_count=input_total_pages,
+                    rejected_pages=[],
+                    true_clean_pages=list(range(1, input_total_pages + 1)),
+                )
                 record_edm_end(filename, edm_result="CLEAN-UNCHECKED", final_folder="CLEAN", notes="EDM ZIP empty or unreadable")
                 t["route_ms"] = _ms(route_start)
                 finalize_audit("CLEAN-UNCHECKED", "CLEAN", "EDM ZIP empty or unreadable")
-                emit_pipeline_summary("CLEAN-UNCHECKED")
+                emit_pipeline_summary(
+                    "CLEAN-UNCHECKED",
+                    total_pages=input_total_pages,
+                    duplicate_pages=[],
+                    clean_pages=list(range(1, input_total_pages + 1)),
+                    rejected_page_count=0,
+                    true_clean_page_count=input_total_pages,
+                )
                 return
 
             AWB_SESSION_CACHE["awb"] = awb
@@ -1402,11 +1489,29 @@ def process_file(filepath):
         safe_move(filepath, CLEAN_FOLDER, filename)
         log.info("RESULT: NEW -> CLEAN")
         append_to_csv(filename)
-        append_edm_result_to_awb_logs(awb, filename, result="CLEAN", reason="AWB not found in EDM", match_stats="N/A")
+        append_edm_result_to_awb_logs(
+            awb,
+            filename,
+            result="CLEAN",
+            reason="AWB not found in EDM",
+            match_stats="N/A",
+            total_pages=input_total_pages,
+            rejected_page_count=0,
+            true_clean_page_count=input_total_pages,
+            rejected_pages=[],
+            true_clean_pages=list(range(1, input_total_pages + 1)),
+        )
         record_edm_end(filename, edm_result="CLEAN", final_folder="CLEAN")
         t["route_ms"] = _ms(route_start)
         finalize_audit("CLEAN", "CLEAN", "AWB not found in EDM")
-        emit_pipeline_summary("CLEAN")
+        emit_pipeline_summary(
+            "CLEAN",
+            total_pages=input_total_pages,
+            duplicate_pages=[],
+            clean_pages=list(range(1, input_total_pages + 1)),
+            rejected_page_count=0,
+            true_clean_page_count=input_total_pages,
+        )
         return
 
     log.info(f"Extracted {len(edm_pdf_list)} PDF(s) from EDM ZIP")
@@ -1416,9 +1521,11 @@ def process_file(filepath):
     t["compare_ms"] = _ms(compare_start)
     log.info(f"[TIMING] page comparison completed in {t['compare_ms']} ms")
 
-    incoming_doc = fitz.open(filepath)
-    total_pages = len(incoming_doc)
-    incoming_doc.close()
+    total_pages = input_total_pages
+    if total_pages <= 0:
+        incoming_doc = fitz.open(filepath)
+        total_pages = len(incoming_doc)
+        incoming_doc.close()
 
     match_stats = (f"dup_pages={sorted([p+1 for p in duplicate_pages])} "
                    f"total_pages={total_pages} edm_docs={len(edm_pdf_list)}")
@@ -1440,11 +1547,30 @@ def process_file(filepath):
         log.info("RESULT: NO duplicates -> CLEAN")
         safe_move(filepath, CLEAN_FOLDER, filename)
         append_to_csv(filename)
-        append_edm_result_to_awb_logs(awb, filename, result="CLEAN", reason="No matching pages found in EDM", match_stats=match_stats)
+        append_edm_result_to_awb_logs(
+            awb,
+            filename,
+            result="CLEAN",
+            reason="No matching pages found in EDM",
+            match_stats=match_stats,
+            total_pages=total_pages,
+            rejected_page_count=0,
+            true_clean_page_count=total_pages,
+            rejected_pages=[],
+            true_clean_pages=list(range(1, total_pages + 1)),
+        )
         record_edm_end(filename, edm_result="CLEAN", final_folder="CLEAN")
         t["route_ms"] = _ms(route_start)
         finalize_audit("CLEAN", "CLEAN", "No matching pages found in EDM", match_stats=match_stats)
-        emit_pipeline_summary("CLEAN", total_pages=total_pages, duplicate_pages=[], clean_pages=list(range(1, total_pages + 1)), dup_meta=dup_meta)
+        emit_pipeline_summary(
+            "CLEAN",
+            total_pages=total_pages,
+            duplicate_pages=[],
+            clean_pages=list(range(1, total_pages + 1)),
+            dup_meta=dup_meta,
+            rejected_page_count=0,
+            true_clean_page_count=total_pages,
+        )
         return
 
     # Case 2: All pages duplicate
@@ -1455,7 +1581,18 @@ def process_file(filepath):
             log.warning(f"RESULT: {reason}")
             safe_move(filepath, CLEAN_FOLDER, filename)
             append_to_csv(filename)
-            append_edm_result_to_awb_logs(awb, filename, result="CLEAN-UNCHECKED", reason=reason, match_stats=match_stats)
+            append_edm_result_to_awb_logs(
+                awb,
+                filename,
+                result="CLEAN-UNCHECKED",
+                reason=reason,
+                match_stats=match_stats,
+                total_pages=total_pages,
+                rejected_page_count=0,
+                true_clean_page_count=total_pages,
+                rejected_pages=[],
+                true_clean_pages=list(range(1, total_pages + 1)),
+            )
             record_edm_end(filename, edm_result="CLEAN-UNCHECKED", final_folder="CLEAN", notes=reason)
             t["route_ms"] = _ms(route_start)
             finalize_audit("CLEAN-UNCHECKED", "CLEAN", reason, match_stats=match_stats)
@@ -1465,6 +1602,8 @@ def process_file(filepath):
                 duplicate_pages=[p + 1 for p in sorted(duplicate_pages)],
                 clean_pages=list(range(1, total_pages + 1)),
                 dup_meta=dup_meta,
+                rejected_page_count=0,
+                true_clean_page_count=total_pages,
             )
             return
 
@@ -1472,11 +1611,30 @@ def process_file(filepath):
         log.info(f"RESULT: ALL {total_pages} page(s) are duplicates -> REJECTED")
         safe_move(filepath, REJECTED_FOLDER, filename)
         append_to_rejected_sheet(filename, reason=f"All {total_pages} page(s) matched EDM", match_stats=match_stats)
-        append_edm_result_to_awb_logs(awb, filename, result="REJECTED", reason=f"All {total_pages} page(s) matched EDM", match_stats=match_stats)
+        append_edm_result_to_awb_logs(
+            awb,
+            filename,
+            result="REJECTED",
+            reason=f"All {total_pages} page(s) matched EDM",
+            match_stats=match_stats,
+            total_pages=total_pages,
+            rejected_page_count=total_pages,
+            true_clean_page_count=0,
+            rejected_pages=list(range(1, total_pages + 1)),
+            true_clean_pages=[],
+        )
         record_edm_end(filename, edm_result="REJECTED", final_folder="REJECTED")
         t["route_ms"] = _ms(route_start)
         finalize_audit("REJECTED", "REJECTED", f"All {total_pages} page(s) matched EDM", match_stats=match_stats)
-        emit_pipeline_summary("REJECTED", total_pages=total_pages, duplicate_pages=[p + 1 for p in sorted(duplicate_pages)], clean_pages=[], dup_meta=dup_meta)
+        emit_pipeline_summary(
+            "REJECTED",
+            total_pages=total_pages,
+            duplicate_pages=[p + 1 for p in sorted(duplicate_pages)],
+            clean_pages=[],
+            dup_meta=dup_meta,
+            rejected_page_count=total_pages,
+            true_clean_page_count=0,
+        )
         return
 
     # Case 3: More than threshold duplicate pages + high ratio + adequate confidence -> REJECTED
@@ -1489,7 +1647,18 @@ def process_file(filepath):
         log.info(f"RESULT: {reason} -> REJECTED")
         safe_move(filepath, REJECTED_FOLDER, filename)
         append_to_rejected_sheet(filename, reason=reason, match_stats=match_stats)
-        append_edm_result_to_awb_logs(awb, filename, result="REJECTED", reason=reason, match_stats=match_stats)
+        append_edm_result_to_awb_logs(
+            awb,
+            filename,
+            result="REJECTED",
+            reason=reason,
+            match_stats=match_stats,
+            total_pages=total_pages,
+            rejected_page_count=total_pages,
+            true_clean_page_count=0,
+            rejected_pages=list(range(1, total_pages + 1)),
+            true_clean_pages=[],
+        )
         record_edm_end(filename, edm_result="REJECTED", final_folder="REJECTED", notes=reason)
         t["route_ms"] = _ms(route_start)
         finalize_audit("REJECTED", "REJECTED", reason, match_stats=match_stats)
@@ -1499,6 +1668,8 @@ def process_file(filepath):
             duplicate_pages=[p + 1 for p in sorted(duplicate_pages)],
             clean_pages=[],
             dup_meta=dup_meta,
+            rejected_page_count=total_pages,
+            true_clean_page_count=0,
         )
         return
 
@@ -1538,9 +1709,18 @@ def process_file(filepath):
         log.info(f"Duplicate pages ({len(duplicate_pages)} page(s)) -> REJECTED")
 
         append_to_csv(filename)
-        append_edm_result_to_awb_logs(awb, filename, result="PARTIAL-CLEAN",
+        append_edm_result_to_awb_logs(
+            awb,
+            filename,
+            result="PARTIAL-CLEAN",
             reason=f"Pages {[p+1 for p in sorted(duplicate_pages)]} matched EDM -- stripped remainder to CLEAN",
-            match_stats=match_stats)
+            match_stats=match_stats,
+            total_pages=total_pages,
+            rejected_page_count=len(duplicate_pages),
+            true_clean_page_count=len(clean_pages),
+            rejected_pages=[p + 1 for p in sorted(duplicate_pages)],
+            true_clean_pages=[p + 1 for p in clean_pages],
+        )
         record_edm_end(filename, edm_result="PARTIAL-CLEAN", final_folder="CLEAN",
                        notes=f"Pages {[p+1 for p in sorted(duplicate_pages)]} removed")
         t["route_ms"] = _ms(route_start)
@@ -1551,6 +1731,8 @@ def process_file(filepath):
             duplicate_pages=[p + 1 for p in sorted(duplicate_pages)],
             clean_pages=[p + 1 for p in clean_pages],
             dup_meta=dup_meta,
+            rejected_page_count=len(duplicate_pages),
+            true_clean_page_count=len(clean_pages),
         )
 
     except Exception as e:
@@ -1558,8 +1740,18 @@ def process_file(filepath):
         log.warning(f"Error stripping pages: {e} -- passing through original as CLEAN-UNCHECKED")
         safe_move(filepath, CLEAN_FOLDER, filename)
         append_to_csv(filename)
-        append_edm_result_to_awb_logs(awb, filename, result="CLEAN-UNCHECKED",
-            reason=f"Page stripping failed: {e}", match_stats=match_stats)
+        append_edm_result_to_awb_logs(
+            awb,
+            filename,
+            result="CLEAN-UNCHECKED",
+            reason=f"Page stripping failed: {e}",
+            match_stats=match_stats,
+            total_pages=total_pages,
+            rejected_page_count=0,
+            true_clean_page_count=total_pages,
+            rejected_pages=[],
+            true_clean_pages=list(range(1, total_pages + 1)),
+        )
         record_edm_end(filename, edm_result="CLEAN-UNCHECKED", final_folder="CLEAN",
                        notes=f"Page stripping failed: {e}")
         t["route_ms"] = _ms(route_start)
@@ -1570,6 +1762,8 @@ def process_file(filepath):
             duplicate_pages=[p + 1 for p in sorted(duplicate_pages)],
             clean_pages=list(range(1, total_pages + 1)),
             dup_meta=dup_meta,
+            rejected_page_count=0,
+            true_clean_page_count=total_pages,
         )
 
 

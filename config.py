@@ -89,7 +89,6 @@ EDM_DOWNLOAD_URL       = EDM_BASE_URL + "/edm/protocol/downloadDocuments"
 # ── OCR / Matching ────────────────────────────────────────────────────────────
 OCR_DPI_MAIN              = _int("OCR_DPI_MAIN",   320)
 OCR_DPI_STRONG            = _int("OCR_DPI_STRONG", 420)
-OCR_DPI_ROT_PROBE         = 140
 ENABLE_ROTATION_LAST_RESORT = _bool("ENABLE_ROTATION_LAST_RESORT", True)
 
 AWB_LEN                     = 12
@@ -97,18 +96,9 @@ ALLOW_1_DIGIT_TOLERANCE     = True
 STRICT_AMBIGUOUS            = True
 STOP_EARLY_IF_MANY_12DIGITS = True
 MANY_12DIGITS_THRESHOLD     = 6
-DISABLE_TOLERANCE_IF_MANY   = True
-MANY_12DIGITS_TOL_CUTOFF    = 3
-CONTEXT_WINDOW_CHARS        = 40
-AWB_CONTEXT_KEYWORDS = [
-    "AWB", "HAWB", "MAWB", "AIRWAYBILL", "AIR WAYBILL", "WAYBILL",
-    "400", "ACI", "TRACKING", "TRACK", "BILL",
-]
-
 EXCEL_REFRESH_SECONDS = _int("EXCEL_REFRESH_SECONDS", 30)
 POLL_SECONDS          = _int("POLL_SECONDS", 2)
 HEARTBEAT_SECONDS     = _int("HEARTBEAT_SECONDS", 10)
-PAGES_TO_SCAN         = 1   # page-1-only pipeline
 
 # ── EDM duplicate-check tuning ───────────────────────────────────────────────
 TEXT_SIMILARITY_THRESHOLD   = _int("TEXT_SIMILARITY_THRESHOLD", 50)
@@ -116,7 +106,6 @@ PAGE_OCR_LIMIT              = _int("PAGE_OCR_LIMIT", 8)
 PHASH_THRESHOLD             = _int("PHASH_THRESHOLD", 10)
 MIN_EMBEDDED_TEXT_LENGTH    = 25
 EARLY_FOCUS_MATCH_THRESHOLD = 3
-OCR_TOP_PERCENT             = 50
 FILE_SETTLE_SECONDS         = 3
 
 # ── Batch builder ─────────────────────────────────────────────────────────────

@@ -7,7 +7,6 @@
 # All paths and tuning values come from config.py / .env.
 # No hardcoded paths in this file.
 
-import os
 import re
 import sys
 import time

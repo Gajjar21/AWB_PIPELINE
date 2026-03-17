@@ -54,21 +54,15 @@ STAGE_CACHE_CSV  = config.STAGE_CACHE_CSV
 
 DPI_MAIN          = config.OCR_DPI_MAIN
 DPI_STRONG        = config.OCR_DPI_STRONG
-DPI_ROT_PROBE     = config.OCR_DPI_ROT_PROBE
 POLL_SECONDS      = config.POLL_SECONDS
 HEARTBEAT_SECONDS = config.HEARTBEAT_SECONDS
 EXCEL_REFRESH_SECONDS = config.EXCEL_REFRESH_SECONDS
-PAGES_TO_SCAN     = config.PAGES_TO_SCAN
 
 AWB_LEN                     = config.AWB_LEN
 ALLOW_1_DIGIT_TOLERANCE     = config.ALLOW_1_DIGIT_TOLERANCE
 STRICT_AMBIGUOUS            = config.STRICT_AMBIGUOUS
 STOP_EARLY_IF_MANY_12DIGITS = config.STOP_EARLY_IF_MANY_12DIGITS
 MANY_12DIGITS_THRESHOLD     = config.MANY_12DIGITS_THRESHOLD
-DISABLE_TOLERANCE_IF_MANY   = config.DISABLE_TOLERANCE_IF_MANY
-MANY_12DIGITS_TOL_CUTOFF    = config.MANY_12DIGITS_TOL_CUTOFF
-AWB_CONTEXT_KEYWORDS        = config.AWB_CONTEXT_KEYWORDS
-CONTEXT_WINDOW_CHARS        = config.CONTEXT_WINDOW_CHARS
 ENABLE_ROTATION_LAST_RESORT = config.ENABLE_ROTATION_LAST_RESORT
 
 
@@ -316,30 +310,6 @@ def extract_candidates_from_text(s):
     return out
 
 
-def extract_candidates_near_keywords(s):
-    s = s or ""
-    su = s.upper()
-    out = set()
-    for m in re.finditer(r"(\d[\d\-\s]{10,30}\d)", s):
-        raw = m.group(0)
-        d = re.sub(r"\D", "", raw)
-        if len(d) != AWB_LEN:
-            continue
-        start = max(0, m.start() - CONTEXT_WINDOW_CHARS)
-        end = min(len(su), m.end() + CONTEXT_WINDOW_CHARS)
-        window = su[start:end]
-        if any(k in window for k in AWB_CONTEXT_KEYWORDS):
-            out.add(d)
-    for m in re.finditer(r"\b\d{12}\b", s):
-        d = m.group(0)
-        start = max(0, m.start() - CONTEXT_WINDOW_CHARS)
-        end = min(len(su), m.end() + CONTEXT_WINDOW_CHARS)
-        window = su[start:end]
-        if any(k in window for k in AWB_CONTEXT_KEYWORDS):
-            out.add(d)
-    return out
-
-
 # =========================
 # TEXT LAYER (CHEAP) - PAGE 1 ONLY
 # =========================
@@ -395,10 +365,6 @@ def ocr_digits_only(img, psm=6):
         "-c preserve_interword_spaces=1 "
     )
     return pytesseract.image_to_string(img, config=cfg)
-
-
-def digit_score(s):
-    return sum(1 for ch in (s or "") if ch.isdigit())
 
 
 # =========================
